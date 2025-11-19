@@ -305,6 +305,8 @@ class _BasicCalculatorState extends State<BasicCalculator> {
     );
   }
 
+  //prtivate button builder
+
   Widget _buildButton(String buttonText) {
     return Material(
       color: _getButtonColor(buttonText),
