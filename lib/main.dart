@@ -4,7 +4,11 @@ import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Modelo que representa un Libro.
+// ==========================================
+// CAPA DE DATOS 
+// ==========================================
+ 
+/// Modelo que representa un Libro
 class Book {
   final String id;
   final String title;
@@ -24,30 +28,21 @@ class Book {
     required this.rating,
   });
 
+  // Factory para crear un libro desde la respuesta de Google Books API
   factory Book.fromJsonApi(Map<String, dynamic> json) {
-    final volumeInfo = json['volumeInfo'] ?? {};
-    
-   ///Manejo seguro de autores para evitar crash si la lista está vacía///
-    String parsedAuthor = 'Desconocido';
-    if (volumeInfo['authors'] != null && (volumeInfo['authors'] as List).isNotEmpty) {
-      parsedAuthor = (volumeInfo['authors'] as List).first.toString();
-    }
-    String image = volumeInfo['imageLinks']?['thumbnail'] ?? '';
-    if (image.startsWith('http://')) {
-      image = image.replaceFirst('http://', 'https://');
-    }
-
+    final volumeInfo = json['volumeInfo'];
     return Book(
       id: json['id'] ?? '',
       title: volumeInfo['title'] ?? 'Sin título',
-      author: parsedAuthor,
+      author: (volumeInfo['authors'] as List<dynamic>?)?.first ?? 'Desconocido',
       description: volumeInfo['description'] ?? 'Sin descripción disponible.',
-      thumbnailUrl: image,
+      thumbnailUrl: volumeInfo['imageLinks']?['thumbnail'] ?? '',
       publishedDate: volumeInfo['publishedDate'] ?? 'Fecha desconocida',
       rating: (volumeInfo['averageRating'] ?? 0.0).toDouble(),
     );
   }
 
+  // Convertir a Map para guardar en Shared Preferences
   Map<String, dynamic> toMap() {
     return {
       'id': id,
@@ -60,6 +55,7 @@ class Book {
     };
   }
 
+  // Crear desde Map recuperado de Shared Preferences
   factory Book.fromMap(Map<String, dynamic> map) {
     return Book(
       id: map['id'],
@@ -73,81 +69,82 @@ class Book {
   }
 }
 
-/// Servicio encargado de la comunicación HTTP.
+/// Servicio para la comunicación HTTP.
 class BookService {
-  final String _authority = 'www.googleapis.com';
-  final String _path = '/books/v1/volumes';
+  final String _baseUrl = 'https://www.googleapis.com/books/v1/volumes';
 
   Future<List<Book>> searchBooks(String query) async {
     if (query.isEmpty) return [];
+    
+    final response = await http.get(Uri.parse('$_baseUrl?q=$query'));
 
-    try {
-      final uri = Uri.https(_authority, _path, {'q': query});
-      final response = await http.get(uri);
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['items'] != null) {
-          final List<dynamic> items = data['items'];
-          return items.map((json) => Book.fromJsonApi(json)).toList();
-        }
-        return [];
-      } else {
-        throw Exception('Error al conectar con la API: ${response.statusCode}');
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      if (data['items'] != null) {
+        final List<dynamic> items = data['items'];
+        return items.map((json) => Book.fromJsonApi(json)).toList();
       }
-    } catch (e) {
-      throw Exception('Error de red: $e');
+      return [];
+    } else {
+      throw Exception('Error al conectar con la API');
     }
   }
 }
 
 // ==========================================
-// LÓGICA DE NEGOCIO
+// CAPA DE LÓGICA DE NEGOCIO 
 // ==========================================
 
+/// Provider para gestionar el estado de la aplicación
 class BookProvider extends ChangeNotifier {
   final BookService _bookService = BookService();
-
+  
+  // Estado de Búsqueda
   List<Book> _searchResults = [];
   bool _isLoading = false;
   String _error = '';
+
+  // Estado de Favoritos
   List<Book> _favorites = [];
 
+  // Getters
   List<Book> get searchResults => _searchResults;
   bool get isLoading => _isLoading;
   String get error => _error;
   List<Book> get favorites => _favorites;
 
   BookProvider() {
-    _loadFavorites();
+    _loadFavorites(); // favorites al iniciar
   }
 
+  // Acción: Buscar libros (RF1, RF2, RNF4)
   Future<void> searchBooks(String query) async {
     _isLoading = true;
     _error = '';
-    notifyListeners();
+    notifyListeners(); // Notifica a la UI para mostrar Loading
 
     try {
       _searchResults = await _bookService.searchBooks(query);
     } catch (e) {
-      _error = 'Ocurrió un error: $e';
+      _error = 'Ocurrió un error al buscar: $e';
       _searchResults = [];
     } finally {
       _isLoading = false;
-      notifyListeners();
+      notifyListeners(); // Notifica a la UI para mostrar resultados o error
     }
   }
 
+  // Acción: Marcar/Desmarcar Favorito (RF4)
   void toggleFavorite(Book book) {
     final isFav = _favorites.any((element) => element.id == book.id);
-
+    
     if (isFav) {
       _favorites.removeWhere((element) => element.id == book.id);
     } else {
       _favorites.add(book);
     }
-
-    _saveFavorites();
+    
+    _saveFavorites(); // Persistir cambios
     notifyListeners();
   }
 
@@ -155,6 +152,7 @@ class BookProvider extends ChangeNotifier {
     return _favorites.any((element) => element.id == id);
   }
 
+  // Persistencia: Guardar en Shared Preferences (RNF3)
   Future<void> _saveFavorites() async {
     final prefs = await SharedPreferences.getInstance();
     final String encodedData = json.encode(
@@ -163,10 +161,11 @@ class BookProvider extends ChangeNotifier {
     await prefs.setString('favorites_books', encodedData);
   }
 
+  // Persistencia:(RNF3)
   Future<void> _loadFavorites() async {
     final prefs = await SharedPreferences.getInstance();
     final String? encodedData = prefs.getString('favorites_books');
-
+    
     if (encodedData != null) {
       final List<dynamic> decodedList = json.decode(encodedData);
       _favorites = decodedList.map((item) => Book.fromMap(item)).toList();
@@ -176,11 +175,12 @@ class BookProvider extends ChangeNotifier {
 }
 
 // ==========================================
-// CAPA DE UI
+// CAPA DE UI 
 // ==========================================
 
 void main() {
   runApp(
+    // Inyectcion de provider (RNF2)
     ChangeNotifierProvider(
       create: (_) => BookProvider(),
       child: const MyApp(),
@@ -205,6 +205,7 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// Pantalla Principal (Búsqueda)
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
@@ -219,6 +220,7 @@ class HomeScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.favorite),
             onPressed: () {
+              // Navegar a Favoritos (RF5)
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const FavoritesScreen()),
@@ -231,10 +233,9 @@ class HomeScreen extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.all(16.0),
-            child: TextField(
+            child: TextField( // RF1
               decoration: const InputDecoration(
                 labelText: 'Buscar libro...',
-                hintText: 'Ej: Harry Potter',
                 border: OutlineInputBorder(),
                 suffixIcon: Icon(Icons.search),
               ),
@@ -254,18 +255,20 @@ class HomeScreen extends StatelessWidget {
   }
 
   Widget _buildBody(BookProvider provider) {
+    // Manejo de Estados (RNF4)
     if (provider.isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
 
     if (provider.error.isNotEmpty) {
-      return Center(child: Text(provider.error, textAlign: TextAlign.center));
+      return Center(child: Text(provider.error));
     }
 
     if (provider.searchResults.isEmpty) {
       return const Center(child: Text('Escribe algo para buscar.'));
     }
 
+    // Listado de Resultados (RF2)
     return ListView.builder(
       itemCount: provider.searchResults.length,
       itemBuilder: (context, index) {
@@ -276,6 +279,7 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
+// Widget reutilizable para items de lista
 class BookListTile extends StatelessWidget {
   final Book book;
 
@@ -285,17 +289,13 @@ class BookListTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       leading: book.thumbnailUrl.isNotEmpty
-          ? Image.network(
-              book.thumbnailUrl,
-              width: 50,
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) =>
-                  const Icon(Icons.broken_image),
-            )
+          ? Image.network(book.thumbnailUrl, width: 50, fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) => const Icon(Icons.book),)
           : const Icon(Icons.book, size: 50),
       title: Text(book.title, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(book.author),
       onTap: () {
+        // Navegación a Detalle (RF3)
         Navigator.push(
           context,
           MaterialPageRoute(
@@ -307,6 +307,7 @@ class BookListTile extends StatelessWidget {
   }
 }
 
+// Pantalla de Detalle (RF3, RF4)
 class DetailScreen extends StatelessWidget {
   final Book book;
 
@@ -314,6 +315,7 @@ class DetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Uso de Consumer para escuchar cambios solo en el botón de favorito
     return Consumer<BookProvider>(
       builder: (context, provider, child) {
         final isFav = provider.isFavorite(book.id);
@@ -324,9 +326,9 @@ class DetailScreen extends StatelessWidget {
           ),
           floatingActionButton: FloatingActionButton(
             onPressed: () {
-              provider.toggleFavorite(book);
+              provider.toggleFavorite(book); // RF4
             },
-            backgroundColor: isFav ? Colors.amber : Colors.grey[200],
+            backgroundColor: isFav ? Colors.yellow : Colors.grey[200],
             child: Icon(
               isFav ? Icons.star : Icons.star_border,
               color: isFav ? Colors.black : Colors.grey,
@@ -379,6 +381,7 @@ class DetailScreen extends StatelessWidget {
   }
 }
 
+// Pantalla de Favoritos (RF5)
 class FavoritesScreen extends StatelessWidget {
   const FavoritesScreen({super.key});
 
